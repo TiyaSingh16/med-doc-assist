@@ -8,6 +8,10 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-key"
     database_url: str = ""
     openai_api_key: str = ""
+    
+    # JWT settings
+    jwt_algorithm: str = "HS256"
+    jwt_expiry_minutes: int = 30
 
     class Config:
         env_file = ".env"

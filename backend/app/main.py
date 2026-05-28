@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import time
 from app.config import settings
 from app.utils.logger import setup_logger
+from app.routers import auth
 
 logger = setup_logger()
 
@@ -20,6 +21,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth.router)
 
 
 @app.middleware("http")
