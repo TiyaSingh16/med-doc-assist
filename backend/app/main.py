@@ -4,7 +4,7 @@ import time
 from app.config import settings
 from app.utils.logger import setup_logger
 from app.routers import auth
-
+from app.routers import documents
 logger = setup_logger()
 
 app = FastAPI(
@@ -23,7 +23,7 @@ app.add_middleware(
 )
 
 app.include_router(auth.router)
-
+app.include_router(documents.router)
 
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
