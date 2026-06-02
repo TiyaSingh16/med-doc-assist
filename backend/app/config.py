@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-key"
     database_url: str = ""
     openai_api_key: str = ""
+    google_api_key: str = ""
 
     # JWT settings
     jwt_algorithm: str = "HS256"
