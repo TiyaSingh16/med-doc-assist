@@ -7,6 +7,7 @@ from app.models.user import User
 from app.models.document import Document
 from app.schemas.document import DocumentResponse, DocumentListResponse
 from app.services.pdf_service import smart_extract, upload_to_cloudinary
+from app.ai.embedder import embed_document
 from app.utils.dependencies import get_current_user
 from app.utils.logger import setup_logger
 
@@ -21,7 +22,12 @@ def process_document(document_id: str, file_path: str, db: Session):
             return
         extracted_text = smart_extract(file_path)
         document.extracted_text = extracted_text
-        document.processing_status = "completed"
+        db.commit()
+        embed_success = embed_document(extracted_text, document_id)
+        if embed_success:
+            document.processing_status = "completed"
+        else:
+            document.processing_status = "failed"
         db.commit()
         logger.info(f"Document processed successfully: {document_id}")
     except Exception as e:
@@ -33,8 +39,6 @@ def process_document(document_id: str, file_path: str, db: Session):
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
-
-
 @router.post("/upload", response_model=DocumentResponse, status_code=201)
 async def upload_document(
     background_tasks: BackgroundTasks,

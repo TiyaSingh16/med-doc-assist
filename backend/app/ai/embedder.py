@@ -1,18 +1,17 @@
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_google_genai import GoogleGenerativeAIEmbeddings
-from langchain_community.vectorstores import Chroma
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_chroma import Chroma
 from app.config import settings
 from app.utils.logger import setup_logger
-import os
 
 logger = setup_logger()
 
 CHROMA_PATH = "chroma_db"
 
+
 def get_embeddings():
-    return GoogleGenerativeAIEmbeddings(
-        model="models/embedding-001",
-        google_api_key=settings.google_api_key
+    return HuggingFaceEmbeddings(
+        model_name="sentence-transformers/all-MiniLM-L6-v2"
     )
 
 
