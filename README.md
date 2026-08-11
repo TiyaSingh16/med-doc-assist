@@ -11,7 +11,7 @@ pipeline. Automatically extracts diagnoses, medications, and lab values.
 - **Deployment:** Railway (backend), Vercel (frontend)
 
 ## Status
-🚧 Active development — Day 1 of 10
+Active development — Day 1 of 10
 
 ## Setup
 cd backend

@@ -10,6 +10,11 @@ from app.services.pdf_service import smart_extract, upload_to_cloudinary
 from app.ai.embedder import embed_document
 from app.utils.dependencies import get_current_user
 from app.utils.logger import setup_logger
+from app.services.extraction import extract_structured_data
+from app.schemas.extraction import ExtractionResult
+from app.services.comparison import compare_documents
+from app.schemas.comparison import ComparisonResult
+from pydantic import BaseModel
 
 logger = setup_logger()
 router = APIRouter(prefix="/documents", tags=["Documents"])
@@ -39,6 +44,10 @@ def process_document(document_id: str, file_path: str, db: Session):
     finally:
         if os.path.exists(file_path):
             os.remove(file_path)
+
+class CompareRequest(BaseModel):
+    document_id_a: str
+    document_id_b: str
 @router.post("/upload", response_model=DocumentResponse, status_code=201)
 async def upload_document(
     background_tasks: BackgroundTasks,
@@ -136,3 +145,100 @@ async def get_document(
         created_at=document.created_at,
         file_path=document.file_path,
     )
+
+
+
+@router.post("/{document_id}/extract", response_model=ExtractionResult)
+async def extract_document_data(
+    document_id: str,
+    force_refresh: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    document = db.query(Document).filter(
+        Document.id == document_id,
+        Document.user_id == current_user.id,
+    ).first()
+
+    if not document:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if document.processing_status != "completed":
+        raise HTTPException(
+            status_code=400,
+            detail=f"Document is not ready for extraction (status: {document.processing_status})",
+        )
+
+    # Return cached result unless the user explicitly asks to re-run extraction
+    if document.extracted_data and not force_refresh:
+        logger.info(f"Returning cached extraction for document {document_id}")
+        return ExtractionResult(**document.extracted_data)
+
+    if not document.extracted_text:
+        raise HTTPException(status_code=400, detail="No extracted text available for this document")
+
+    try:
+        result = extract_structured_data(document.extracted_text)
+        document.extracted_data = result.model_dump()
+        db.commit()
+        logger.info(f"Extraction completed and cached for document {document_id}")
+        return result
+    except Exception as e:
+        logger.error(f"Extraction endpoint failed for document {document_id}: {e}")
+        raise HTTPException(status_code=500, detail="Structured extraction failed")
+def _get_or_extract(document: Document, db: Session) -> ExtractionResult:
+    """
+    Returns cached extraction if available, otherwise runs extraction and caches it.
+    Shared helper so /compare reuses the same cache-first logic as /extract.
+    """
+    if document.extracted_data:
+        return ExtractionResult(**document.extracted_data)
+
+    if not document.extracted_text:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Document '{document.filename}' has no extracted text available",
+        )
+
+    result = extract_structured_data(document.extracted_text)
+    document.extracted_data = result.model_dump()
+    db.commit()
+    return result
+
+
+@router.post("/compare", response_model=ComparisonResult)
+async def compare_two_documents(
+    request: CompareRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    doc_a = db.query(Document).filter(
+        Document.id == request.document_id_a,
+        Document.user_id == current_user.id,
+    ).first()
+    doc_b = db.query(Document).filter(
+        Document.id == request.document_id_b,
+        Document.user_id == current_user.id,
+    ).first()
+
+    if not doc_a or not doc_b:
+        raise HTTPException(status_code=404, detail="One or both documents not found")
+
+    for doc in (doc_a, doc_b):
+        if doc.processing_status != "completed":
+            raise HTTPException(
+                status_code=400,
+                detail=f"Document '{doc.filename}' is not ready (status: {doc.processing_status})",
+            )
+
+    try:
+        extraction_a = _get_or_extract(doc_a, db)
+        extraction_b = _get_or_extract(doc_b, db)
+        result = compare_documents(extraction_a, extraction_b)
+        logger.info(f"Comparison completed between {doc_a.id} and {doc_b.id}")
+        return result
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Comparison failed: {e}")
+        raise HTTPException(status_code=500, detail="Document comparison failed")
