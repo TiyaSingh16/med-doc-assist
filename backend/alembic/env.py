@@ -20,6 +20,13 @@ if config.config_file_name is not None:
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
 target_metadata = Base.metadata
+import os
+
+# Override the hardcoded alembic.ini URL with DATABASE_URL from environment if present
+# (used in production/Railway; falls back to alembic.ini for local dev)
+database_url = os.getenv("database_url") or os.getenv("DATABASE_URL")
+if database_url:
+    config.set_main_option("sqlalchemy.url", database_url)
 
 # other values from the config, defined by the needs of env.py,
 # can be acquired:
