@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     cloudinary_cloud_name: str = ""
     cloudinary_api_key: str = ""
     cloudinary_api_secret: str = ""
-
+    frontend_url: str = "http://localhost:5173"
     class Config:
         env_file = ".env"
 
