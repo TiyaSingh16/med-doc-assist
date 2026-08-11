@@ -143,6 +143,24 @@ med-doc-assist/
 
 ---
 
+### Login & Registration
+![Login](./screenshots/login.png)
+![Register](./screenshots/register.png)
+
+### Document Upload
+![Upload](./screenshots/upload.png)
+![Uploaded documents](./screenshots/uploaded.png)
+
+### Chat with your document
+![Chat Q&A](./screenshots/qna.png)
+
+### Document comparison
+![Comparison step 1](./screenshots/compare1.png)
+![Comparison results](./screenshots/compared.png)
+![Comparison results continued](./screenshots/compared2.png)
+
+---
+
 ## Author
 
 Built by Tiya Singh as a portfolio project demonstrating full-stack development, AI/ML integration, and cloud deployment.
