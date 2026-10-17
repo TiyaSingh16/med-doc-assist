@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    name: Backend tests (PostgreSQL + Tesseract)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mda
+          POSTGRES_PASSWORD: mda
+          POSTGRES_DB: mda_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mda -d mda_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    defaults:
+      run:
+        working-directory: backend
+    env:
+      DATABASE_URL: postgresql://mda:mda@localhost:5432/mda_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install Tesseract (for the real OCR test)
+        run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
+      # The tests use fake embeddings and a fake LLM, so the multi-GB model
+      # stack (torch, sentence-transformers, transformers) is not installed.
+      # Everything else is pinned exactly as in production.
+      - name: Install dependencies (without the embedding model stack)
+        run: |
+          grep -vE '^(torch|sentence-transformers|transformers|tokenizers|safetensors|scikit-learn|scipy|sympy|networkx|mpmath|huggingface_hub|hf-xet|pyreadline3|win32_setctime)==' requirements.txt > /tmp/requirements-ci.txt
+          pip install -r /tmp/requirements-ci.txt
+      - name: Run tests (migrations are applied by the test setup)
+        run: python -m pytest -q
+
+  frontend:
+    name: Frontend lint and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run build
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
