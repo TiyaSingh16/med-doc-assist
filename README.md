@@ -3,7 +3,7 @@
 An AI-powered web app that lets users upload medical documents (lab reports, prescriptions, discharge summaries) and interact with them intelligently — chat with the document, extract structured data, and compare multiple reports over time to track health trends.
 
 **🔗 Live demo:** [med-doc-assist.vercel.app](https://med-doc-assist.vercel.app)
-**🔗 API docs:** `/docs` on the backend (Render URL added after the first deploy)
+**🔗 API docs:** [med-doc-assist-api.onrender.com/docs](https://med-doc-assist-api.onrender.com/docs). Free tier: the first request after an idle period can take up to a minute.
 
 <!-- Add screenshots here, e.g.:
 ![Dashboard](./screenshots/dashboard.png)
