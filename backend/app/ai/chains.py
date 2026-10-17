@@ -1,13 +1,14 @@
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough
-from langchain_core.output_parsers import StrOutputParser
-from app.ai.embedder import get_vectorstore
+
+from app.ai.embedder import UNKNOWN_PAGE, ensure_vectors
 from app.ai.prompts import MEDICAL_QA_PROMPT
 from app.config import settings
 from app.utils.logger import setup_logger
 
 logger = setup_logger()
+
+TOP_K = 4
+EXCERPT_PREVIEW_CHARS = 240
 
 
 def get_llm(temperature: float = 0.3):
@@ -15,68 +16,61 @@ def get_llm(temperature: float = 0.3):
         model="gemini-2.5-flash",
         google_api_key=settings.google_api_key,
         temperature=temperature,
+        timeout=60,
+        max_retries=2,
     )
 
 
-def format_docs(docs):
-    return "\n\n".join(doc.page_content for doc in docs)
+def retrieve(document_id: str, extracted_text: str | None, question: str):
+    """Top-k chunks for the question, rebuilding the index first if it was lost."""
+    store = ensure_vectors(document_id, extracted_text)
+    return store.as_retriever(search_kwargs={"k": TOP_K}).invoke(question)
 
 
-def ask_question(document_id: str, question: str) -> dict:
-    try:
-        vectorstore = get_vectorstore(document_id)
-        retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+def page_label(meta: dict) -> str:
+    page = meta.get("page", UNKNOWN_PAGE)
+    return str(page) if page and page != UNKNOWN_PAGE else "unknown"
 
-        prompt = PromptTemplate(
-            template=MEDICAL_QA_PROMPT,
-            input_variables=["context", "question"]
-        )
 
-        llm = get_llm()
+def format_context(docs) -> str:
+    # Each excerpt gets a header with its page, so the model can cite it.
+    return "\n\n".join(
+        f"[excerpt {i} | page {page_label(d.metadata)}]\n{d.page_content}" for i, d in enumerate(docs, start=1)
+    )
 
-        chain = (
-            {"context": retriever | format_docs, "question": RunnablePassthrough()}
-            | prompt
-            | llm
-            | StrOutputParser()
-        )
 
-        answer = chain.invoke(question)
-        source_docs = retriever.invoke(question)
-        chunks_used = len(source_docs)
-
-        logger.info(f"Question answered for doc {document_id}, used {chunks_used} chunks")
-        return {
-            "answer": answer,
-            "chunks_used": chunks_used,
+def to_sources(docs) -> list[dict]:
+    """What the UI shows under an answer, so a user can check it against the PDF."""
+    return [
+        {
+            "excerpt_number": i,
+            "page": d.metadata.get("page") or None,
+            "chunk_index": d.metadata.get("chunk_index"),
+            "excerpt": d.page_content[:EXCERPT_PREVIEW_CHARS],
         }
+        for i, d in enumerate(docs, start=1)
+    ]
 
-    except Exception as e:
-        logger.error(f"QA chain failed: {e}")
-        raise
-async def ask_question_stream(document_id: str, question: str):
+
+def build_prompt(docs, question: str) -> str:
+    return MEDICAL_QA_PROMPT.format(context=format_context(docs), question=question)
+
+
+def ask_question(document_id: str, extracted_text: str | None, question: str) -> dict:
+    """Retrieve once, answer from those chunks, and return them as sources.
+
+    Before, the chain retrieved inside the pipeline and then called the
+    retriever a second time just to count chunks (twice the work, and the
+    count could describe different chunks than the answer used).
     """
-    Same RAG logic as ask_question, but yields answer tokens as they're generated
-    instead of returning the full string at once.
-    """
-    vectorstore = get_vectorstore(document_id)
-    retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
+    docs = retrieve(document_id, extracted_text, question)
+    answer = get_llm().invoke(build_prompt(docs, question)).content
+    logger.info(f"Question answered for doc {document_id}, used {len(docs)} chunks")
+    return {"answer": answer, "chunks_used": len(docs), "sources": to_sources(docs)}
 
-    source_docs = retriever.invoke(question)
-    context = format_docs(source_docs)
-    chunks_used = len(source_docs)
 
-    prompt = PromptTemplate(
-        template=MEDICAL_QA_PROMPT,
-        input_variables=["context", "question"]
-    ).format(context=context, question=question)
-
-    llm = get_llm()
-
-    full_answer = ""
-    async for chunk in llm.astream(prompt):
-        token = chunk.content
-        full_answer += token
-        yield {"type": "token", "content": token}
-
-    yield {"type": "done", "chunks_used": chunks_used, "full_answer": full_answer}
+async def stream_answer(docs, question: str):
+    """Yield answer tokens for already-retrieved chunks."""
+    async for chunk in get_llm().astream(build_prompt(docs, question)):
+        if chunk.content:
+            yield chunk.content

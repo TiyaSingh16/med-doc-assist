@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy.orm import Session
@@ -19,7 +19,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 
 def create_access_token(data: dict) -> str:
     to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=settings.jwt_expiry_minutes)
+    expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_expiry_minutes)
     to_encode.update({"exp": expire})
     return jwt.encode(to_encode, settings.secret_key, algorithm=settings.jwt_algorithm)
 
@@ -39,8 +39,16 @@ def register_user(db: Session, user_data: UserRegister) -> User:
 
 def login_user(db: Session, email: str, password: str) -> str:
     user = db.query(User).filter(User.email == email).first()
-    if not user or not verify_password(password, user.hashed_password):
+    if not user:
+        # Spend the same bcrypt time as a real check, so response time does
+        # not reveal which emails have accounts.
+        verify_password(password, _DUMMY_HASH)
+        raise ValueError("Invalid email or password")
+    if not verify_password(password, user.hashed_password):
         raise ValueError("Invalid email or password")
 
     token = create_access_token({"sub": str(user.id), "email": user.email})
     return token
+
+
+_DUMMY_HASH = hash_password("not-a-real-password")

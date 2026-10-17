@@ -57,3 +57,82 @@ def register_and_login(client, email=None, password="password123"):
 @pytest.fixture
 def auth_headers(client):
     return register_and_login(client)
+
+
+# ---- fakes for external services -------------------------------------------
+
+@pytest.fixture
+def fake_embeddings(monkeypatch, tmp_path):
+    """Deterministic hash-based embeddings and a throwaway Chroma directory.
+
+    Not semantic, so tests check wiring (pages, sources, rebuilds), not
+    retrieval quality.
+    """
+    from langchain_core.embeddings import DeterministicFakeEmbedding
+
+    from app.ai import embedder
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "chroma_path", str(tmp_path / "chroma"))
+    fake = DeterministicFakeEmbedding(size=32)
+    monkeypatch.setattr(embedder, "get_embeddings", lambda: fake)
+    return fake
+
+
+@pytest.fixture
+def fake_llm(monkeypatch):
+    """Replaces Gemini. Records the prompts it was given."""
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    from app.ai import chains
+
+    calls = {"prompts": [], "responses": ["Your hemoglobin is 13.5 g/dL [p. 2]."]}
+
+    class RecordingLLM(FakeListChatModel):
+        def invoke(self, prompt, *args, **kwargs):
+            calls["prompts"].append(prompt)
+            return super().invoke(prompt, *args, **kwargs)
+
+        async def astream(self, prompt, *args, **kwargs):
+            calls["prompts"].append(prompt)
+            async for chunk in super().astream(prompt, *args, **kwargs):
+                yield chunk
+
+    monkeypatch.setattr(chains, "get_llm", lambda **kw: RecordingLLM(responses=list(calls["responses"])))
+    return calls
+
+
+@pytest.fixture(autouse=True)
+def reset_rate_limiter():
+    from app.utils.rate_limit import llm_limiter
+
+    llm_limiter.reset()
+    yield
+
+
+@pytest.fixture
+def fake_storage(monkeypatch):
+    """Records Cloudinary uploads instead of sending them."""
+    from app.services import pdf_service
+
+    uploads = []
+
+    def fake_upload(file_path, **kwargs):
+        uploads.append(kwargs)
+        return {"public_id": kwargs["public_id"], "secure_url": "https://example.invalid/should-not-be-used"}
+
+    monkeypatch.setattr(pdf_service.cloudinary.uploader, "upload", fake_upload)
+    return uploads
+
+
+def make_pdf(pages: list[str]) -> bytes:
+    """A real PDF with one text page per string."""
+    import fitz
+
+    doc = fitz.open()
+    for text in pages:
+        page = doc.new_page()
+        page.insert_text((72, 72), text, fontsize=11)
+    data = doc.tobytes()
+    doc.close()
+    return data

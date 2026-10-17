@@ -12,10 +12,10 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 @router.post("/register", response_model=UserResponse, status_code=201)
-async def register(user_data: UserRegister, db: Session = Depends(get_db)):
+def register(user_data: UserRegister, db: Session = Depends(get_db)):
     try:
         user = register_user(db, user_data)
-        logger.info(f"New user registered: {user.email}")
+        logger.info(f"New user registered: {user.id}")
         return UserResponse(
             id=str(user.id),
             email=user.email,
@@ -29,10 +29,10 @@ async def register(user_data: UserRegister, db: Session = Depends(get_db)):
 
 
 @router.post("/login", response_model=TokenResponse)
-async def login(user_data: UserLogin, db: Session = Depends(get_db)):
+def login(user_data: UserLogin, db: Session = Depends(get_db)):
     try:
         token = login_user(db, user_data.email, user_data.password)
-        logger.info(f"User logged in: {user_data.email}")
+        logger.info("User logged in")
         return TokenResponse(access_token=token)
     except ValueError as e:
         raise HTTPException(
@@ -42,7 +42,7 @@ async def login(user_data: UserLogin, db: Session = Depends(get_db)):
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_me(current_user: User = Depends(get_current_user)):
+def get_me(current_user: User = Depends(get_current_user)):
     return UserResponse(
         id=str(current_user.id),
         email=current_user.email,

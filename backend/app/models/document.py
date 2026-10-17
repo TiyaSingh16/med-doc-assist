@@ -13,6 +13,7 @@ class Document(Base):
     filename = Column(String, nullable=False)
     file_path = Column(String, nullable=False)
     extracted_text = Column(Text, nullable=True)
-    extracted_data = Column(JSONB, nullable=True)   # <-- NEW: structured extraction result
+    extracted_data = Column(JSONB, nullable=True)   # structured extraction result (cached)
     processing_status = Column(String, default="pending")
+    processing_error = Column(Text, nullable=True)  # user-facing reason when status is "failed"
     created_at = Column(DateTime(timezone=True), server_default=func.now())

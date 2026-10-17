@@ -1,5 +1,5 @@
 from sqlalchemy import Column, String, DateTime, ForeignKey, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.sql import func
 import uuid
 from app.database import Base
@@ -14,4 +14,5 @@ class ChatMessage(Base):
     role = Column(String, nullable=False)
     content = Column(Text, nullable=False)
     chunks_used = Column(String, nullable=True)
+    sources = Column(JSONB, nullable=True)  # excerpts (page, chunk) the answer was based on
     created_at = Column(DateTime(timezone=True), server_default=func.now())

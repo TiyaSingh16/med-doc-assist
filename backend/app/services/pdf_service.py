@@ -1,16 +1,17 @@
+import io
+import shutil
+import uuid
+
+import cloudinary
+import cloudinary.uploader
 import fitz
 import pytesseract
 from PIL import Image
-import io
-import os
-import cloudinary
-import cloudinary.uploader
+
 from app.config import settings
 from app.utils.logger import setup_logger
 
 logger = setup_logger()
-
-pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 cloudinary.config(
     cloud_name=settings.cloudinary_cloud_name,
@@ -18,59 +19,96 @@ cloudinary.config(
     api_secret=settings.cloudinary_api_secret,
 )
 
+# Pages are joined with a form feed so page boundaries survive in the single
+# extracted_text column; the embedder splits on it to tag chunks with pages.
+PAGE_SEPARATOR = "\f"
+
+# Below this many characters of digital text, the PDF is treated as scanned.
+MIN_DIGITAL_CHARS = 100
+
+PDF_MAGIC = b"%PDF-"
+
+
+class ExtractionError(Exception):
+    """A failure whose message is safe and useful to show the document's owner."""
+
+
+def looks_like_pdf(content: bytes) -> bool:
+    # A filename ending in .pdf proves nothing; real PDFs start with "%PDF-"
+    # (some writers put a few bytes before it, so allow a small offset).
+    return PDF_MAGIC in content[:1024]
+
+
+def find_tesseract() -> str | None:
+    """Configured path, else whatever is on PATH. None if OCR is unavailable."""
+    if settings.tesseract_cmd:
+        return settings.tesseract_cmd
+    return shutil.which("tesseract")
+
 
 def extract_text_digital(file_path: str) -> str:
-    try:
-        doc = fitz.open(file_path)
-        text = ""
-        for page in doc:
-            text += page.get_text()
-        doc.close()
-        logger.info(f"Digital extraction successful: {len(text)} characters")
-        return text.strip()
-    except Exception as e:
-        logger.error(f"Digital extraction failed: {e}")
-        return ""
+    with fitz.open(file_path) as doc:
+        pages = [page.get_text().strip() for page in doc]
+    text = PAGE_SEPARATOR.join(pages)
+    logger.info(f"Digital extraction: {len(pages)} pages, {len(text)} characters")
+    return text.strip()
 
 
 def extract_text_ocr(file_path: str) -> str:
-    try:
-        doc = fitz.open(file_path)
-        text = ""
+    tesseract = find_tesseract()
+    if not tesseract:
+        # Previously the Windows path was hardcoded, OCR failed on Linux inside
+        # a try/except and returned "", and a scanned PDF was marked
+        # "completed" with no text. Fail loudly instead.
+        logger.error("Tesseract is not installed or not on PATH; cannot OCR scanned PDFs")
+        raise ExtractionError(
+            "This looks like a scanned PDF, and text recognition (OCR) is not available on the server right now."
+        )
+    pytesseract.pytesseract.tesseract_cmd = tesseract
+    pages = []
+    with fitz.open(file_path) as doc:
         for page in doc:
             pix = page.get_pixmap(dpi=300)
-            img_data = pix.tobytes("png")
-            image = Image.open(io.BytesIO(img_data))
-            page_text = pytesseract.image_to_string(image)
-            text += page_text
-        doc.close()
-        logger.info(f"OCR extraction successful: {len(text)} characters")
-        return text.strip()
-    except Exception as e:
-        logger.error(f"OCR extraction failed: {e}")
-        return ""
+            image = Image.open(io.BytesIO(pix.tobytes("png")))
+            pages.append(pytesseract.image_to_string(image).strip())
+    text = PAGE_SEPARATOR.join(pages)
+    logger.info(f"OCR extraction: {len(pages)} pages, {len(text)} characters")
+    return text.strip()
 
 
 def smart_extract(file_path: str) -> str:
-    logger.info(f"Starting smart extraction for: {file_path}")
-    digital_text = extract_text_digital(file_path)
-    if len(digital_text) > 100:
-        logger.info("Using digital extraction")
-        return digital_text
-    logger.info("Digital text too short, falling back to OCR")
-    return extract_text_ocr(file_path)
-
-
-def upload_to_cloudinary(file_path: str, filename: str) -> str:
+    """Digital text if the PDF has it, otherwise OCR. Raises ExtractionError."""
     try:
-        result = cloudinary.uploader.upload(
-            file_path,
-            resource_type="raw",
-            folder="medical_docs",
-            public_id=filename,
-        )
-        logger.info(f"Uploaded to Cloudinary: {result['secure_url']}")
-        return result["secure_url"]
-    except Exception as e:
-        logger.error(f"Cloudinary upload failed: {e}")
-        raise
+        digital_text = extract_text_digital(file_path)
+    except Exception as e:  # corrupt or encrypted PDF
+        logger.warning(f"Could not read PDF: {e}")
+        raise ExtractionError("The file could not be read as a PDF. It may be corrupted or password-protected.")
+
+    if len(digital_text.replace(PAGE_SEPARATOR, "")) > MIN_DIGITAL_CHARS:
+        return digital_text
+
+    logger.info("Digital text too short, falling back to OCR")
+    text = extract_text_ocr(file_path)
+    if not text.replace(PAGE_SEPARATOR, "").strip():
+        raise ExtractionError("No readable text was found in this document.")
+    return text
+
+
+def upload_to_cloudinary(file_path: str, user_id: str) -> str:
+    """Store the original PDF privately. Returns the storage key, not a URL.
+
+    Before: public_id was the original filename and the upload was public.
+    Two users uploading "report.pdf" overwrote each other's file, and anyone
+    with the URL could read a medical document. Now every upload gets a unique
+    key under the owner's folder, and type="private" means it can only be
+    fetched through a signed URL generated by the server.
+    """
+    public_id = f"medical_docs/{user_id}/{uuid.uuid4()}"
+    result = cloudinary.uploader.upload(
+        file_path,
+        resource_type="raw",
+        type="private",
+        public_id=public_id,
+    )
+    logger.info(f"Stored original privately as {result['public_id']}")
+    return result["public_id"]
