@@ -1,10 +1,6 @@
-from fastapi.testclient import TestClient
-from app.main import app
-
-client = TestClient(app)
 
 
-def get_auth_token():
+def get_auth_token(client):
     client.post("/auth/register", json={
         "email": "doctest@example.com",
         "password": "password123"
@@ -16,8 +12,8 @@ def get_auth_token():
     return response.json()["access_token"]
 
 
-def test_upload_non_pdf_rejected():
-    token = get_auth_token()
+def test_upload_non_pdf_rejected(client):
+    token = get_auth_token(client)
     response = client.post(
         "/documents/upload",
         headers={"Authorization": f"Bearer {token}"},
@@ -26,7 +22,7 @@ def test_upload_non_pdf_rejected():
     assert response.status_code == 400
 
 
-def test_upload_without_auth_rejected():
+def test_upload_without_auth_rejected(client):
     response = client.post(
         "/documents/upload",
         files={"file": ("test.pdf", b"fake pdf content", "application/pdf")},
@@ -34,6 +30,6 @@ def test_upload_without_auth_rejected():
     assert response.status_code == 401
 
 
-def test_get_documents_requires_auth():
+def test_get_documents_requires_auth(client):
     response = client.get("/documents/")
     assert response.status_code == 401
