@@ -1,9 +1,9 @@
 import { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import { useParams, useNavigate } from "react-router-dom";
-import { askQuestion } from "../api/chat";
 import { getDocument } from "../api/documents";
 import { getChatHistory } from "../api/chat";
+import apiClient from "../api/client";
 
 export default function Chat() {
   const { documentId } = useParams();
@@ -26,6 +26,7 @@ export default function Chat() {
         role: m.role,
         text: m.content,
         chunksUsed: m.chunks_used,
+        sources: m.sources || [],
       }));
       setMessages(loaded);
     })
@@ -49,12 +50,12 @@ export default function Chat() {
   setSending(true);
 
   // Add an empty assistant message that we'll fill in as tokens arrive
-  setMessages((prev) => [...prev, { role: "assistant", text: "", chunksUsed: null }]);
+  setMessages((prev) => [...prev, { role: "assistant", text: "", chunksUsed: null, sources: [] }]);
 
   try {
     const token = localStorage.getItem("token");
     const response = await fetch(
-      `${import.meta.env.VITE_API_URL}/chat/query/stream`,
+      `${apiClient.defaults.baseURL}/chat/query/stream`,
       {
         method: "POST",
         headers: {
@@ -66,7 +67,21 @@ export default function Chat() {
     );
 
     if (!response.ok) {
-      throw new Error("Stream request failed");
+      // Errors before streaming starts are normal JSON responses, e.g. 429
+      // (rate limit) or 400 (document still processing).
+      let detail = "";
+      try {
+        detail = (await response.json()).detail;
+      } catch {
+        // not JSON (e.g. a proxy error page)
+      }
+      throw new Error(
+        response.status === 429
+          ? "You're asking questions too quickly. Please wait a minute and try again."
+          : typeof detail === "string" && detail
+            ? detail
+            : "Failed to get an answer. Please try again."
+      );
     }
 
     const reader = response.body.getReader();
@@ -99,7 +114,11 @@ export default function Chat() {
           setMessages((prev) => {
             const updated = [...prev];
             const last = updated[updated.length - 1];
-            updated[updated.length - 1] = { ...last, chunksUsed: event.chunks_used };
+            updated[updated.length - 1] = {
+              ...last,
+              chunksUsed: event.chunks_used,
+              sources: event.sources || [],
+            };
             return updated;
           });
         } else if (event.type === "error") {
@@ -108,7 +127,13 @@ export default function Chat() {
       }
     }
   } catch (err) {
-    setError("Failed to get an answer");
+    setError(err.message || "Failed to get an answer");
+    // Drop the empty assistant bubble left behind by a failed request.
+    setMessages((prev) =>
+      prev.length && prev[prev.length - 1].role === "assistant" && !prev[prev.length - 1].text
+        ? prev.slice(0, -1)
+        : prev
+    );
   } finally {
     setSending(false);
   }
@@ -155,10 +180,25 @@ export default function Chat() {
                 ) : (
                 msg.text
                 )}
-                {msg.role === "assistant" && (
+                {msg.role === "assistant" && msg.chunksUsed != null && (
                   <p className="text-xs text-slate-400 mt-1">
                     Based on {msg.chunksUsed} document excerpt{msg.chunksUsed !== 1 ? "s" : ""}
                   </p>
+                )}
+                {msg.role === "assistant" && msg.sources?.length > 0 && (
+                  <details className="mt-2 text-xs text-slate-500">
+                    <summary className="cursor-pointer select-none">Sources</summary>
+                    <ul className="mt-1 space-y-1">
+                      {msg.sources.map((s) => (
+                        <li key={s.excerpt_number} className="border-l-2 border-slate-200 pl-2">
+                          <span className="font-medium text-slate-600">
+                            {s.page ? `Page ${s.page}` : `Excerpt ${s.excerpt_number}`}:
+                          </span>{" "}
+                          {s.excerpt}…
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
                 )}
               </div>
             </div>

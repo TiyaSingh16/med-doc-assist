@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from "react";
 import { useNavigate } from "react-router-dom";
 import { uploadDocument, getDocuments } from "../api/documents";
 import { logoutUser } from "../api/auth";
-import { compareDocuments } from "../api/documents";
 
 const STATUS_STYLES = {
   completed: "bg-green-100 text-green-700",
@@ -24,16 +23,33 @@ export default function Dashboard() {
     try {
       const res = await getDocuments();
       setDocuments(res.data.documents);
-    } catch (err) {
+    } catch {
       setError("Failed to load documents");
     } finally {
       setLoading(false);
     }
   }, []);
 
+  // Initial load. State is only set after the request finishes (never
+  // synchronously inside the effect), and not at all if the page unmounted.
   useEffect(() => {
-    fetchDocuments();
-  }, [fetchDocuments]);
+    let cancelled = false;
+    getDocuments().then(
+      (res) => {
+        if (cancelled) return;
+        setDocuments(res.data.documents);
+        setLoading(false);
+      },
+      () => {
+        if (cancelled) return;
+        setError("Failed to load documents");
+        setLoading(false);
+      }
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Poll every 4s while any document is still processing, so status badges update live
   useEffect(() => {
@@ -172,6 +188,9 @@ export default function Dashboard() {
                       >
                         {doc.processing_status}
                       </span>
+                      {doc.processing_status === "failed" && doc.processing_error && (
+                        <p className="text-xs text-red-600 mt-1">{doc.processing_error}</p>
+                      )}
                     </div>
                   </div>
                   {!compareMode && (
