@@ -8,6 +8,9 @@ RUN apt-get update \
 
 RUN useradd -m -u 1000 app
 WORKDIR /home/app/app
+# WORKDIR creates the folder as root; the app (running as "app") must be able
+# to create chroma_db/ and logs/ inside it at runtime.
+RUN chown app:app /home/app/app
 
 # pyreadline3 and win32_setctime are Windows-only; skipped if present.
 COPY --chown=app requirements.txt .

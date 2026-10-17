@@ -68,3 +68,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t med-doc-assist-api backend
+      # Building is not enough: the container must also be able to write the
+      # folders it creates at runtime (vector store, logs) as its non-root user.
+      - name: Container can write its runtime folders
+        run: docker run --rm --entrypoint sh med-doc-assist-api -c 'mkdir -p chroma_db && touch chroma_db/probe logs/probe && which tesseract && echo writable'
