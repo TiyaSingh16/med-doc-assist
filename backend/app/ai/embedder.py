@@ -1,6 +1,7 @@
 from functools import lru_cache
 
 from langchain_chroma import Chroma
+from langchain_core.embeddings import Embeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
 from app.config import settings
@@ -15,18 +16,37 @@ CHUNK_OVERLAP = 50
 UNKNOWN_PAGE = 0  # Chroma metadata can't be None; 0 = page not known (old documents)
 
 
+class FastEmbedMiniLM(Embeddings):
+    """all-MiniLM-L6-v2 run through ONNX Runtime (fastembed) instead of PyTorch.
+
+    Same model as before (sentence-transformers/all-MiniLM-L6-v2, 384
+    dimensions), but without torch the install is about 2 GB smaller and the
+    process fits in a 512 MB free hosting instance (measured: ~224 MB for the
+    app before the model loads; the model adds roughly 100-150 MB).
+    """
+
+    def __init__(self, model_name: str):
+        from fastembed import TextEmbedding
+
+        self._model = TextEmbedding(model_name=model_name)
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        return [vector.tolist() for vector in self._model.embed(texts)]
+
+    def embed_query(self, text: str) -> list[float]:
+        return self.embed_documents([text])[0]
+
+
 @lru_cache(maxsize=1)
-def get_embeddings():
+def get_embeddings() -> Embeddings:
     """Load the embedding model once per process.
 
-    Before, a new HuggingFaceEmbeddings (and the model weights) was created on
-    every upload and every question. The import is also deferred, so code that
-    never embeds (and the tests) does not need torch loaded.
+    Before, a new embedding model was created on every upload and every
+    question. The import is deferred so code that never embeds (and the
+    tests) does not load it.
     """
-    from langchain_huggingface import HuggingFaceEmbeddings
-
     logger.info(f"Loading embedding model {EMBEDDING_MODEL}")
-    return HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL)
+    return FastEmbedMiniLM(EMBEDDING_MODEL)
 
 
 def collection_name(document_id: str) -> str:

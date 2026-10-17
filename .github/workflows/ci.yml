@@ -37,13 +37,8 @@ jobs:
           python-version: "3.13"
       - name: Install Tesseract (for the real OCR test)
         run: sudo apt-get update && sudo apt-get install -y tesseract-ocr
-      # The tests use fake embeddings and a fake LLM, so the multi-GB model
-      # stack (torch, sentence-transformers, transformers) is not installed.
-      # Everything else is pinned exactly as in production.
-      - name: Install dependencies (without the embedding model stack)
-        run: |
-          grep -vE '^(torch|sentence-transformers|transformers|tokenizers|safetensors|scikit-learn|scipy|sympy|networkx|mpmath|huggingface_hub|hf-xet|pyreadline3|win32_setctime)==' requirements.txt > /tmp/requirements-ci.txt
-          pip install -r /tmp/requirements-ci.txt
+      - name: Install dependencies (same pins as production)
+        run: pip install -r requirements.txt
       - name: Run tests (migrations are applied by the test setup)
         run: python -m pytest -q
 
@@ -66,25 +61,10 @@ jobs:
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
 
-  deploy-backend:
-    name: Deploy backend to Hugging Face Space
-    # Continuous delivery: only after both CI jobs pass, only for pushes to
-    # main, and only once the Space has been configured (repository variable
-    # HF_SPACE, e.g. "TiyaSingh16/med-doc-assist-api", plus secret HF_TOKEN).
-    needs: [backend, frontend]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.HF_SPACE != ''
+
+  docker:
+    name: Backend Docker image builds
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Push a single snapshot commit of backend/ (no history), so old binary
-      # files in the repository's history are never sent to the Space.
-      - name: Push backend/ snapshot to the Space
-        env:
-          HF_TOKEN: ${{ secrets.HF_TOKEN }}
-          HF_SPACE: ${{ vars.HF_SPACE }}
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@users.noreply.github.com"
-          tree=$(git rev-parse HEAD:backend)
-          commit=$(git commit-tree "$tree" -m "Deploy ${GITHUB_SHA::7} from GitHub")
-          git push --force "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}" "$commit:refs/heads/main"
+      - run: docker build -t med-doc-assist-api backend

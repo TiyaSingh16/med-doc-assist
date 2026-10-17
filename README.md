@@ -3,7 +3,7 @@
 An AI-powered web app that lets users upload medical documents (lab reports, prescriptions, discharge summaries) and interact with them intelligently — chat with the document, extract structured data, and compare multiple reports over time to track health trends.
 
 **🔗 Live demo:** [med-doc-assist.vercel.app](https://med-doc-assist.vercel.app)
-**🔗 API docs:** [med-doc-assist-production.up.railway.app/docs](https://med-doc-assist-production.up.railway.app/docs)
+**🔗 API docs:** `/docs` on the backend (Render URL added after the first deploy)
 
 <!-- Add screenshots here, e.g.:
 ![Dashboard](./screenshots/dashboard.png)
@@ -24,7 +24,7 @@ An AI-powered web app that lets users upload medical documents (lab reports, pre
 - 📝 **Persistent chat history** — conversations are saved per document and survive page refreshes
 - 🔒 **Private storage**: originals are stored privately in Cloudinary under a unique key per upload, and are never exposed by the API
 - ♻️ **Self-healing vector index**: if the vector store is lost (for example on a redeploy), a document's vectors are rebuilt from its saved text the next time it is used
-- ☁️ **Fully deployed**: live on Railway (backend + PostgreSQL) and Vercel (frontend)
+- ☁️ **Deployed**: backend on Render (Docker), PostgreSQL on Neon, frontend on Vercel
 
 ---
 
@@ -35,7 +35,7 @@ An AI-powered web app that lets users upload medical documents (lab reports, pre
 - JWT auth (python-jose, bcrypt)
 - Google Gemini 2.5 Flash (LLM + structured output)
 - LangChain (RAG chains, streaming), ChromaDB (vector store)
-- HuggingFace `all-MiniLM-L6-v2` (embeddings)
+- `all-MiniLM-L6-v2` embeddings, run locally with fastembed (ONNX Runtime, no PyTorch)
 - PyMuPDF + Tesseract OCR (document text extraction)
 - Cloudinary (file storage)
 
@@ -45,7 +45,8 @@ An AI-powered web app that lets users upload medical documents (lab reports, pre
 - react-markdown (formatted chat responses)
 
 **Deployment**
-- Railway (backend + managed PostgreSQL)
+- Render (backend, Docker image from `backend/Dockerfile`, free tier)
+- Neon (managed PostgreSQL, free tier)
 - Vercel (frontend, static build)
 
 ---
@@ -53,7 +54,7 @@ An AI-powered web app that lets users upload medical documents (lab reports, pre
 ## Architecture Overview
 
 ```
-User → React (Vercel) → FastAPI (Railway) → PostgreSQL (Railway)
+User → React (Vercel) → FastAPI (Render, Docker) → PostgreSQL (Neon)
                               │
                               ├─→ Cloudinary (PDF storage)
                               ├─→ ChromaDB (vector embeddings)
@@ -81,8 +82,8 @@ A few decisions worth highlighting (also covered in more depth in interviews):
 |---|---|
 | Medical files are sensitive | Uploaded PDFs are stored as **private** Cloudinary files under `medical_docs/<user>/<uuid>`, so they are unguessable and two users with the same filename can't overwrite each other. The API never returns a storage URL. Every document endpoint checks ownership and returns 404 for other users' documents. |
 | Fake or huge uploads | Checked by content (`%PDF-` magic bytes), not just the extension. 10 MB cap, enforced without reading more than the limit. |
-| Scanned PDFs | Digital text first, then Tesseract OCR. Tesseract is found via `TESSERACT_CMD` or `PATH` and installed on Railway via `railpack.json`. If no text can be extracted, the document is marked **failed with a reason** instead of "completed" with nothing in it. |
-| Lost vectors | Chroma lives on the server's disk, which Railway replaces on redeploy. PostgreSQL keeps the extracted text, and `ensure_vectors()` rebuilds a document's index on first use. Embedding is idempotent (stable ids). |
+| Scanned PDFs | Digital text first, then Tesseract OCR. Tesseract is found via `TESSERACT_CMD` or `PATH`, and is installed in the Docker image. If no text can be extracted, the document is marked **failed with a reason** instead of "completed" with nothing in it. |
+| Lost vectors | Chroma lives on the server's disk, which the host replaces on every redeploy and restart. PostgreSQL keeps the extracted text, and `ensure_vectors()` rebuilds a document's index on first use. Embedding is idempotent (stable ids). |
 | One slow LLM call blocking everyone | Routes that do blocking work (sync SQLAlchemy, Cloudinary, Gemini) are plain `def`, so FastAPI runs them in a thread pool. Streaming runs retrieval in a thread. Background processing uses its own DB session. |
 | Token forgery | `SECRET_KEY` is required (min 16 chars; known placeholders rejected), so the app refuses to start without it. Login takes the same time for unknown emails. |
 | Cost and abuse | Per-user rate limit (default 20/min) on chat, extraction and comparison; returns `429` with `Retry-After`. |
@@ -132,7 +133,10 @@ There are 45 tests. They run against **real PostgreSQL** with the real Alembic m
 
 GitHub Actions (`.github/workflows/ci.yml`) runs on every push:
 - **Backend:** the test suite against a PostgreSQL 16 service, with Tesseract installed.
+- **Docker:** builds the production image.
 - **Frontend:** `npm ci`, lint, build, and `npm audit` of production dependencies.
+
+Render deploys the backend from `main`. With Render's "auto-deploy after CI checks pass" option, a red CI run never reaches production.
 
 ---
 
@@ -193,10 +197,10 @@ med-doc-assist/
 │   │   ├── services/       # Business logic (extraction, comparison, PDF processing)
 │   │   ├── utils/          # Auth dependency, rate limiter, logging
 │   │   └── main.py
-│   ├── alembic/            # Database migrations (applied on every deploy)
+│   ├── alembic/            # Database migrations (applied on every container start)
 │   ├── eval/               # Retrieval evaluation (dataset + hit@k/MRR runner)
 │   ├── tests/              # pytest suite (PostgreSQL, OCR, fakes for external APIs)
-│   └── railpack.json       # Installs Tesseract on Railway
+│   └── Dockerfile          # Production image: Tesseract, dependencies, migrations + uvicorn
 └── frontend/
     └── src/
         ├── api/             # API client functions
@@ -227,7 +231,8 @@ med-doc-assist/
 ## Limitations
 
 - **Single-process rate limiting:** the limit is kept in memory, so with several instances each keeps its own count. A shared store (Redis) would fix that.
-- **Extra work after a redeploy:** vectors stored on the container disk are rebuilt on first use, which costs a delay and embedding work. A managed or persistent vector store (pgvector, or a Railway volume) would avoid it.
+- **Extra work after a restart:** vectors stored on the container disk are rebuilt on first use, which costs a delay and embedding work. pgvector (in the same Neon database) would avoid it.
+- **Free tier sleeps:** Render's free tier sleeps after about 15 minutes idle, so the first request takes up to a minute, and the model downloads again after a restart.
 - **The comparison is LLM-judged:** improved or worsened trends come from the model. Computing numeric changes in code (with unit checks) would be more reliable.
 - **Prompt injection is mitigated, not solved.**
 - **Old documents have no page numbers:** documents processed before page tracking cite excerpts instead of pages, until they are re-uploaded.
