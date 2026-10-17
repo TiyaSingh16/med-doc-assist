@@ -65,3 +65,26 @@ jobs:
       - run: npm run build
       - name: Audit production dependencies
         run: npm audit --omit=dev --audit-level=high
+
+  deploy-backend:
+    name: Deploy backend to Hugging Face Space
+    # Continuous delivery: only after both CI jobs pass, only for pushes to
+    # main, and only once the Space has been configured (repository variable
+    # HF_SPACE, e.g. "TiyaSingh16/med-doc-assist-api", plus secret HF_TOKEN).
+    needs: [backend, frontend]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.HF_SPACE != ''
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Push a single snapshot commit of backend/ (no history), so old binary
+      # files in the repository's history are never sent to the Space.
+      - name: Push backend/ snapshot to the Space
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+          HF_SPACE: ${{ vars.HF_SPACE }}
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          tree=$(git rev-parse HEAD:backend)
+          commit=$(git commit-tree "$tree" -m "Deploy ${GITHUB_SHA::7} from GitHub")
+          git push --force "https://user:${HF_TOKEN}@huggingface.co/spaces/${HF_SPACE}" "$commit:refs/heads/main"
